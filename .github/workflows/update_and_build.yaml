@@ -1,0 +1,63 @@
+name: Update and build
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "05 03 * * *"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mirror
+          token: ${{ secrets.checkout_token }}
+      - name: Update mirror
+        id: update
+        run: |
+          git fetch origin
+          git remote add upstream https://github.com/ptitSeb/box86.git
+          rev1=`git rev-parse HEAD`
+          git pull upstream master
+          rev2=`git rev-parse HEAD`
+
+          echo Upstream commit: `git rev-parse HEAD` > ./commit-info
+
+          if [[ $rev1 != $rev2 ]]; then
+            echo Upstream updated
+            git push origin
+            echo "BUILD=true" >> "$GITHUB_OUTPUT"
+          else
+            echo No upstream update
+            echo "BUILD=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check whether to build
+        id: buildcheck
+        run: |
+          echo BUILD: ${{ steps.update.outputs.BUILD }}
+          echo event_name: ${{ github.event_name }}
+          if [[ ${{ steps.update.outputs.BUILD }} == 'true' ]]; then
+            echo Repo updated, will build
+            echo "BUILD=true" >> "$GITHUB_OUTPUT"
+          elif [[ ${{ github.event_name }} == 'workflow_dispatch' ]]; then
+            echo Manually triggered, will build 
+            echo "BUILD=true" >> "$GITHUB_OUTPUT"
+          else
+            echo Scheduled build, upstream has not changed, so will not build
+          fi
+      - name: Build box86
+        if: steps.buildcheck.outputs.BUILD == 'true'
+        run: |
+          git checkout origin/build -- ./github-scripts
+          ./github-scripts/build_main.sh
+      - name: Create release
+        uses: "ncipollo/release-action@v1.16.0"
+        if: steps.buildcheck.outputs.BUILD == 'true'
+        with:
+          tag: "box86-latest"
+          artifacts: build-nightly/final/box86.zip
+          makeLatest: true
+          allowUpdates: true
+          commit: mirror
+          bodyfile: ./commit-info
+ 
